@@ -1,7 +1,7 @@
 name: Qodo custom rules check
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, reopened, synchronize, ready_for_review]
 
 jobs:
@@ -13,7 +13,13 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-      - name: Checkout repository
+      # pull_request_target grants secrets and a write-capable GITHUB_TOKEN even for
+      # fork PRs, which is exactly why we must NEVER check out or execute the PR's own
+      # head — that would let a PR rewrite this workflow/agent and run it against our
+      # secrets. Checking out the default ref (no `ref:` override) gets the trusted
+      # base-branch version of the agent config; the PR's actual diff is fetched
+      # read-only via `gh pr diff`/`gh pr view` inside the agent, never checked out.
+      - name: Checkout base branch (never the PR head — this job holds secrets)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
