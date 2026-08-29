@@ -142,14 +142,25 @@ export function respondApproval(
   }).then((r) => r.data);
 }
 
-/**
- * Opens the session's SSE stream and invokes `onEvent` with each frame's raw `data:` payload,
- * until `signal` aborts or the connection ends. Uses a hand-rolled fetch + ReadableStream
- * reader instead of the native EventSource specifically so it can send the X-API-Key header —
- * EventSource can't set request headers, and putting the key in the URL instead would leak it
- * into browser history, proxy logs, and any request-logging middleware.
- */
-export async function subscribeToSessionStream(
+/** Parses one already-unwrapped SSE frame (no blank-line separator) into its `data:` payloads.
+ *  Per the SSE spec, the space after the colon is optional and either is valid. */
+function extractDataLines(frame: string): string[] {
+  const out: string[] = [];
+  for (const line of frame.split("\n")) {
+    if (line.startsWith("data:")) {
+      const rest = line.slice("data:".length);
+      out.push(rest.startsWith(" ") ? rest.slice(1) : rest);
+    }
+  }
+  return out;
+}
+
+/** Opens the session's SSE stream once and invokes `onEvent` for each frame's `data:` payload
+ *  until the response body ends or `signal` aborts. Uses a hand-rolled fetch + ReadableStream
+ *  reader instead of the native EventSource specifically so it can send the X-API-Key header —
+ *  EventSource can't set request headers, and putting the key in the URL instead would leak it
+ *  into browser history, proxy logs, and any request-logging middleware. */
+async function readSessionStreamOnce(
   sessionId: string,
   onEvent: (rawData: string) => void,
   signal: AbortSignal,
@@ -168,18 +179,41 @@ export async function subscribeToSessionStream(
   for (;;) {
     const { value, done } = await reader.read();
     if (done) return;
-    buffer += decoder.decode(value, { stream: true });
+    // Normalize CRLF/CR to LF before framing — the SSE spec allows any of the three as a
+    // line ending, and the backend only ever emits LF, but a compliant intermediary proxy
+    // could rewrite them.
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
     let separatorIndex: number;
     while ((separatorIndex = buffer.indexOf("\n\n")) !== -1) {
       const frame = buffer.slice(0, separatorIndex);
       buffer = buffer.slice(separatorIndex + 2);
-      for (const line of frame.split("\n")) {
-        if (line.startsWith("data: ")) {
-          onEvent(line.slice("data: ".length));
-        }
-      }
+      for (const data of extractDataLines(frame)) onEvent(data);
     }
+  }
+}
+
+const RECONNECT_DELAY_MS = 1000;
+
+/** Keeps `readSessionStreamOnce` connected: the backend replays its full buffered event log
+ *  (deduped downstream by event id) at the start of every connection, so a simple
+ *  reconnect-after-EOF-or-error loop is sufficient to recover from a transient disconnect —
+ *  the native EventSource this replaced does the same thing automatically, which a hand-rolled
+ *  fetch-based reader otherwise loses. Runs until `signal` aborts. */
+export async function subscribeToSessionStream(
+  sessionId: string,
+  onEvent: (rawData: string) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  while (!signal.aborted) {
+    try {
+      await readSessionStreamOnce(sessionId, onEvent, signal);
+    } catch (err) {
+      if (signal.aborted) return;
+      console.error(`Session ${sessionId} stream disconnected, reconnecting:`, err);
+    }
+    if (signal.aborted) return;
+    await new Promise((resolve) => setTimeout(resolve, RECONNECT_DELAY_MS));
   }
 }
 

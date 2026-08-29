@@ -55,7 +55,9 @@ export function SessionView({ sessionId }: Props) {
       });
 
     const controller = new AbortController();
-    subscribeToSessionStream(
+    // Reconnects internally on any disconnect until aborted, so this promise only ever
+    // resolves (once aborted) and never needs a rejection handler here.
+    void subscribeToSessionStream(
       sessionId,
       (raw) => {
         try {
@@ -65,9 +67,7 @@ export function SessionView({ sessionId }: Props) {
         }
       },
       controller.signal,
-    ).catch((err) => {
-      if (!cancelled) console.error(`Session ${sessionId} stream error:`, err);
-    });
+    );
 
     return () => {
       // Guards the fetchSessionEvents().then() above: without this, a response that resolves
