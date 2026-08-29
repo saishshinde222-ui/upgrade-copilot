@@ -118,6 +118,12 @@ curl -X PUT http://localhost:8790/api/v1/settings/skills \
   mid-verification, the dashboard stops receiving live updates for that
   session (TrueForge's `subscribeToTurn` API could be used to recover this;
   not yet wired up).
+- **The Qodo custom-rules-check agent (`.github/workflows/qodo.yml`) reads
+  untrusted PR diff text with an LLM while holding write-capable secrets.**
+  It never checks out or executes the PR's own code, and its instructions
+  explicitly treat diff/PR text as inert data rather than commands — but
+  prompt injection via diff content is a residual, structural risk shared by
+  any LLM-based PR reviewer, not one this setup fully eliminates.
 
 ## Qodo Code Review Evidence
 

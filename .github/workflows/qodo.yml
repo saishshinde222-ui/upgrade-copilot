@@ -13,12 +13,14 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-      # pull_request_target grants secrets and a write-capable GITHUB_TOKEN even for
-      # fork PRs, which is exactly why we must NEVER check out or execute the PR's own
-      # head — that would let a PR rewrite this workflow/agent and run it against our
-      # secrets. Checking out the default ref (no `ref:` override) gets the trusted
-      # base-branch version of the agent config; the PR's actual diff is fetched
-      # read-only via `gh pr diff`/`gh pr view` inside the agent, never checked out.
+      # pull_request_target grants secrets and a write-capable GITHUB_TOKEN even for fork
+      # PRs. Checking out the default ref (no `ref:` override) — never the PR head —
+      # means a PR can't rewrite this workflow or the agent's own instructions and have
+      # that modified version run against our secrets. That does NOT fully neutralize
+      # the PR: its diff text is still untrusted input the agent reads (via `gh pr
+      # diff`/`gh pr view`, never checked out as code), so the agent's own instructions
+      # are written to treat that text strictly as data, never as commands to follow.
+      # This is the standard, unavoidable residual risk of any LLM-based PR reviewer.
       - name: Checkout base branch (never the PR head — this job holds secrets)
         uses: actions/checkout@v4
         with:
