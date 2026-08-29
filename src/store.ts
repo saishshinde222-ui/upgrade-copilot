@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isEventDelta, mergeEventDelta } from "@truefoundry/trueforge-sdk";
 import type { TrueForgeApi } from "@truefoundry/trueforge-sdk";
 import type { RepoRecord } from "./types.js";
 
@@ -41,9 +42,23 @@ const MAX_EVENTS_PER_SESSION = 500;
 const sessionEvents = new Map<string, TrueForgeApi.TurnStreamingEvent[]>();
 const sessionListeners = new Map<string, Set<(event: TrueForgeApi.TurnStreamingEvent) => void>>();
 
+/** Stores `event`, merging streaming deltas into their base `model.message` so the catch-up
+ *  buffer stays compact — but always notifies live listeners with the raw event so an open
+ *  SSE connection still sees smooth incremental deltas. */
 export function appendSessionEvent(sessionId: string, event: TrueForgeApi.TurnStreamingEvent): void {
   const events = sessionEvents.get(sessionId) ?? [];
-  events.push(event);
+
+  if (isEventDelta(event)) {
+    const base = events.find((e) => e.id === event.id);
+    if (base) {
+      mergeEventDelta(base, event);
+    } else {
+      events.push(event);
+    }
+  } else {
+    events.push(event);
+  }
+
   if (events.length > MAX_EVENTS_PER_SESSION) {
     events.splice(0, events.length - MAX_EVENTS_PER_SESSION);
   }

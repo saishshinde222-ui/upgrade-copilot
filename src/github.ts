@@ -27,6 +27,9 @@ export function parseRepoUrl(input: string): RepoRef {
     } catch {
       throw new Error(`Not a valid repository URL: "${input}"`);
     }
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error(`Unsupported URL scheme "${url.protocol}" in "${input}"`);
+    }
     if (url.hostname.toLowerCase() !== "github.com") {
       throw new Error(`Only github.com repositories are supported, got host "${url.hostname}"`);
     }

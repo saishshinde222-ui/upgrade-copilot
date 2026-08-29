@@ -27,9 +27,13 @@ check repos sequentially in the main thread. Each subagent must:
 3. Classify the result as exactly one of: safe, needs-manual-migration, or broken, citing the specific
    file/line or command output that justifies the classification.
 
-After all subagents report back, summarize per-repo results. Only if a repo is classified "safe" may you
-propose opening a pull request on that repo bumping the dependency — this requires a human to explicitly
-approve the write tool call; if denied, stop and report the denial reason instead of retrying silently.`;
+After all subagents report back, summarize per-repo results. For every repo classified "safe" (and only
+those), actually call the tool to open a pull request bumping the dependency on that repo — do not just
+describe that a PR "could" be opened and stop, and do not ask the user for permission in a chat message
+first. Calling the write tool is itself always safe to attempt: it will automatically pause and wait for
+explicit human approval before anything is written, because pull-request tools require approval by
+configuration. If the human denies it, stop for that repo and report the denial reason instead of
+retrying silently. Never attempt to open a PR for a repo classified "needs-manual-migration" or "broken".`;
 
 function agentManifest(): TrueForgeApi.AgentSpec {
   return {

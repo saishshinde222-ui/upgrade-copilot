@@ -42,7 +42,12 @@ function repoSummary(repo: RepoRecord) {
 }
 
 async function registerRepoByUrl(url: string): Promise<RepoRecord> {
-  const ref = parseRepoUrl(url);
+  let ref;
+  try {
+    ref = parseRepoUrl(url);
+  } catch (err) {
+    throw new HttpError(400, err instanceof Error ? err.message : `Invalid repository URL: "${url}"`);
+  }
   const client = createGitHubClient();
   const pkg = await fetchPackageJson(client, ref);
   return upsertRepo({
@@ -80,6 +85,33 @@ app.post(
 );
 
 app.post(
+  "/repos/bulk",
+  asyncRoute(async (req, res) => {
+    const { urls } = req.body as { urls?: unknown };
+    if (!Array.isArray(urls) || urls.length === 0) {
+      throw new HttpError(400, "Request body must include a non-empty array field \"urls\"");
+    }
+    if (!urls.every((u) => typeof u === "string")) {
+      throw new HttpError(400, "Every entry in \"urls\" must be a string");
+    }
+
+    const results = await Promise.all(
+      (urls as string[]).map(async (url) => {
+        try {
+          const repo = await registerRepoByUrl(url);
+          return { url, success: true as const, data: repoSummary(repo) };
+        } catch (err) {
+          const message = err instanceof HttpError || err instanceof Error ? err.message : "Unknown error";
+          return { url, success: false as const, error: message };
+        }
+      }),
+    );
+
+    res.status(207).json({ data: results });
+  }),
+);
+
+app.post(
   "/repos/:id/refresh",
   asyncRoute(async (req, res) => {
     const existing = getRepo(req.params.id!);
@@ -106,6 +138,16 @@ app.get(
   "/graph",
   asyncRoute(async (_req, res) => {
     res.json({ data: buildGraph(listRepos()) });
+  }),
+);
+
+app.get(
+  "/graph/dependency/:name/history",
+  asyncRoute(async (req, res) => {
+    // TODO: no version-history tracking yet. Once repos are polled/refreshed over time,
+    // record each observed (repoId, version, seenAt) tuple somewhere durable (this store is
+    // in-memory only and resets on restart) and return the real timeline here instead.
+    res.json({ data: { name: req.params.name, history: [] } });
   }),
 );
 
