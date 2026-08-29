@@ -16,6 +16,7 @@ import {
   markApprovalResolved,
   removeRepo,
   subscribeToSession,
+  unmarkApprovalResolved,
   upsertRepo,
   type SessionEventEntry,
 } from "./store.js";
@@ -326,8 +327,16 @@ app.post(
         ? { status: "allow" }
         : { status: "deny", reason: typeof approval.reason === "string" ? approval.reason : undefined };
 
-    const stream = await respondToApproval({ sessionId, threadId, toolCallId, approval: decision });
-    const turnId = await relayStream(sessionId, stream);
+    let turnId: string | undefined;
+    try {
+      const stream = await respondToApproval({ sessionId, threadId, toolCallId, approval: decision });
+      turnId = await relayStream(sessionId, stream);
+    } catch (err) {
+      // The SDK call never actually went through, so this approval was never really
+      // consumed — let a legitimate retry try again instead of permanently 404ing.
+      unmarkApprovalResolved(sessionId, threadId, toolCallId);
+      throw err;
+    }
     res.status(202).json({ data: { sessionId, turnId } });
   }),
 );

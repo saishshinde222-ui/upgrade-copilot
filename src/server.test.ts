@@ -41,6 +41,7 @@ vi.mock("./trueforgeAgent.js", () => ({
 
 const { app } = await import("./server.js");
 const { appendSessionEvent } = await import("./store.js");
+const { respondToApproval } = await import("./trueforgeAgent.js");
 
 /** Every route but /health requires the API key; attach it once here instead of on every call. */
 function api(method: "get" | "post" | "delete", path: string) {
@@ -255,6 +256,31 @@ describe("verification and approval routes", () => {
       approval: { status: "deny", reason: "not safe" },
     });
     expect(res.status).toBe(202);
+  });
+
+  it("POST /sessions/:sessionId/approval allows a retry after a failed submission (doesn't permanently lock the approval)", async () => {
+    appendSessionEvent("session-1", {
+      id: "approval-3",
+      type: "tool.approval_required",
+      threadId: "main",
+      toolCalls: [{ id: "call_3", sourceEventId: "e1" }],
+      createdAt: new Date().toISOString(),
+    });
+
+    vi.mocked(respondToApproval).mockRejectedValueOnce(new Error("upstream unavailable"));
+    const failed = await api("post", "/sessions/session-1/approval").send({
+      threadId: "main",
+      toolCallId: "call_3",
+      approval: { status: "allow" },
+    });
+    expect(failed.status).toBe(502);
+
+    const retried = await api("post", "/sessions/session-1/approval").send({
+      threadId: "main",
+      toolCallId: "call_3",
+      approval: { status: "allow" },
+    });
+    expect(retried.status).toBe(202);
   });
 
   it("POST /sessions/:sessionId/approval rejects replaying an already-resolved approval", async () => {
