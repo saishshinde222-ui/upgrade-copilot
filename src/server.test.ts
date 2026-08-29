@@ -48,12 +48,19 @@ function api(method: "get" | "post" | "delete", path: string) {
 }
 
 beforeAll(() => {
-  // A pending approval the "approval" test group can legitimately resolve.
+  // Two independent pending approvals the "approval" test group can legitimately resolve.
   appendSessionEvent("session-1", {
     id: "approval-1",
     type: "tool.approval_required",
     threadId: "main",
     toolCalls: [{ id: "call_1", sourceEventId: "e1" }],
+    createdAt: new Date().toISOString(),
+  });
+  appendSessionEvent("session-1", {
+    id: "approval-2",
+    type: "tool.approval_required",
+    threadId: "main",
+    toolCalls: [{ id: "call_2", sourceEventId: "e1" }],
     createdAt: new Date().toISOString(),
   });
 });
@@ -66,6 +73,11 @@ describe("authentication", () => {
 
   it("rejects requests with no API key", async () => {
     const res = await request(app).get("/repos");
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects the API key passed as a query param (header only, to avoid leaking it into URL logs)", async () => {
+    const res = await request(app).get(`/repos?apiKey=${TEST_API_KEY}`);
     expect(res.status).toBe(401);
   });
 
@@ -239,9 +251,19 @@ describe("verification and approval routes", () => {
   it("POST /sessions/:sessionId/approval accepts a deny decision with a reason", async () => {
     const res = await api("post", "/sessions/session-1/approval").send({
       threadId: "main",
-      toolCallId: "call_1",
+      toolCallId: "call_2",
       approval: { status: "deny", reason: "not safe" },
     });
     expect(res.status).toBe(202);
+  });
+
+  it("POST /sessions/:sessionId/approval rejects replaying an already-resolved approval", async () => {
+    // call_1 was already resolved by the "accepts an allow decision" test above.
+    const res = await api("post", "/sessions/session-1/approval").send({
+      threadId: "main",
+      toolCallId: "call_1",
+      approval: { status: "deny", reason: "trying to contradict the earlier allow" },
+    });
+    expect(res.status).toBe(404);
   });
 });

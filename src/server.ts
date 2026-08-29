@@ -11,7 +11,9 @@ import {
   appendSessionEvent,
   getRepo,
   getSessionEvents,
+  isApprovalResolved,
   listRepos,
+  markApprovalResolved,
   removeRepo,
   subscribeToSession,
   upsertRepo,
@@ -51,8 +53,10 @@ function secretsMatch(provided: string, expected: string): boolean {
   return timingSafeEqual(providedBuf, expectedBuf);
 }
 
-/** Every route below this line requires a caller-supplied API key. EventSource can't set
- *  request headers, so the SSE stream route also accepts it as a query param. Fails closed:
+/** Every route below this line requires a caller-supplied API key, via the X-API-Key header
+ *  only — never a query param, which would leak into URL logs/history/proxies. The dashboard's
+ *  SSE client uses a fetch-based reader (not the native EventSource, which can't set headers)
+ *  specifically so it can send this the same way as every other request. Fails closed:
  *  startServer() refuses to run without API_KEY set, so reaching the "missing" branch below
  *  means misconfiguration, not an intentionally-open server. */
 function requireApiKey(req: Request, res: Response, next: NextFunction): void {
@@ -61,7 +65,7 @@ function requireApiKey(req: Request, res: Response, next: NextFunction): void {
     res.status(500).json({ error: "Server is missing API_KEY configuration" });
     return;
   }
-  const provided = req.header("x-api-key") ?? (typeof req.query.apiKey === "string" ? req.query.apiKey : undefined);
+  const provided = req.header("x-api-key");
   if (!provided || !secretsMatch(provided, expected)) {
     res.status(401).json({ error: "Missing or invalid API key" });
     return;
@@ -282,9 +286,11 @@ app.get("/sessions/:sessionId/stream", (req, res) => {
 });
 
 /** A pending approval must correspond to a `tool.approval_required` event we actually saw for
- *  this session — otherwise any caller who can guess or reuse a threadId/toolCallId could
- *  submit an approval decision for a call that was never actually paused there. */
+ *  this session, and must not have been resolved already — otherwise any caller who can guess
+ *  or reuse a threadId/toolCallId could submit a decision for a call that was never actually
+ *  paused there, or replay/contradict a decision that was already acted on. */
 function findPendingApproval(sessionId: string, threadId: string, toolCallId: string): boolean {
+  if (isApprovalResolved(sessionId, threadId, toolCallId)) return false;
   return getSessionEvents(sessionId).some(
     (event) =>
       event.type === "tool.approval_required" &&
@@ -311,6 +317,10 @@ app.post(
     if (!findPendingApproval(sessionId, threadId, toolCallId)) {
       throw new HttpError(404, "No pending approval matches this session, threadId, and toolCallId");
     }
+    // Marked resolved before the SDK call so a rapid duplicate request can't race past the
+    // check above — worst case a legitimate retry after a network error must be treated as a
+    // fresh (and, from TrueForge's side, harmless no-op) approval, not silently accepted twice.
+    markApprovalResolved(sessionId, threadId, toolCallId);
     const decision: TrueForgeApi.ApprovalDecision =
       approval.status === "allow"
         ? { status: "allow" }
