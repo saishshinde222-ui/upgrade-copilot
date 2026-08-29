@@ -60,6 +60,26 @@ describe("buildGraph", () => {
     expect(chalk?.versionMismatch).toBe(false);
   });
 
+  it("does not flag a mismatch when all repos declare the identical unparseable spec", () => {
+    const repos = [
+      makeRepo({ owner: "a", repo: "demo-a", dependencies: { internal: "workspace:*" } }),
+      makeRepo({ owner: "b", repo: "demo-b", dependencies: { internal: "workspace:*" } }),
+    ];
+    const graph = buildGraph(repos);
+    const internal = graph.dependencyNodes.find((d) => d.name === "internal");
+    expect(internal?.versionMismatch).toBe(false);
+  });
+
+  it("conservatively flags a mismatch when specs differ and at least one is unparseable", () => {
+    const repos = [
+      makeRepo({ owner: "a", repo: "demo-a", dependencies: { pkg: "^5.0.0" } }),
+      makeRepo({ owner: "b", repo: "demo-b", dependencies: { pkg: "latest" } }),
+    ];
+    const graph = buildGraph(repos);
+    const pkg = graph.dependencyNodes.find((d) => d.name === "pkg");
+    expect(pkg?.versionMismatch).toBe(true);
+  });
+
   it("never flags a mismatch for a non-shared dependency, even with an unusual range", () => {
     const repos = [makeRepo({ owner: "a", repo: "demo-a", dependencies: { chalk: "^4.1.2" } })];
     const graph = buildGraph(repos);

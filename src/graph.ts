@@ -21,16 +21,33 @@ function repoNodeId(repo: RepoRecord): string {
   return repo.id;
 }
 
-/** Distinct major versions among parseable ranges; unparseable ranges are ignored. */
-function distinctMajors(usages: Usage[]): Set<number> {
+/**
+ * True when the shared usages of a dependency can't be trusted to agree. Two rules, in order:
+ * 1. If every repo declares the exact same spec string, they trivially agree — no mismatch,
+ *    regardless of whether semver can parse that spec (covers tags, git/workspace refs, etc.).
+ * 2. Otherwise, if any spec is unparseable, we can't rule out a real difference — flag it
+ *    conservatively rather than silently ignoring the unparseable one (this is a safety tool;
+ *    "unsure" should read as "needs a human look", not "fine"). If every spec parses, compare
+ *    resolved major versions.
+ */
+function hasVersionMismatch(usages: Usage[]): boolean {
+  const specs = new Set(usages.map((u) => u.version));
+  if (specs.size <= 1) return false;
+
   const majors = new Set<number>();
-  for (const usage of usages) {
-    const min = semver.minVersion(usage.version);
-    if (min) {
-      majors.add(min.major);
+  for (const spec of specs) {
+    // semver.minVersion throws on some invalid ranges (e.g. "latest") rather than returning
+    // null, so both outcomes mean "unparseable" here.
+    let min: ReturnType<typeof semver.minVersion>;
+    try {
+      min = semver.minVersion(spec);
+    } catch {
+      min = null;
     }
+    if (!min) return true;
+    majors.add(min.major);
   }
-  return majors;
+  return majors.size >= 2;
 }
 
 export function buildGraph(repos: RepoRecord[]): DependencyGraph {
@@ -60,7 +77,7 @@ export function buildGraph(repos: RepoRecord[]): DependencyGraph {
 
   for (const [name, usages] of usagesByDependency) {
     const shared = new Set(usages.map((u) => u.repoId)).size >= 2;
-    const versionMismatch = shared && distinctMajors(usages).size >= 2;
+    const versionMismatch = shared && hasVersionMismatch(usages);
 
     dependencyNodes.push({
       type: "dependency",

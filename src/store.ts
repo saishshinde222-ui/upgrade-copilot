@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isEventDelta, mergeEventDelta } from "@truefoundry/trueforge-sdk";
 import type { TrueForgeApi } from "@truefoundry/trueforge-sdk";
-import type { RepoRecord } from "./types.js";
+import type { RepoRecord, SessionErrorEvent } from "./types.js";
 
 const repos = new Map<string, RepoRecord>();
 
@@ -13,8 +13,11 @@ export function getRepo(id: string): RepoRecord | undefined {
   return repos.get(id);
 }
 
+/** GitHub owner/repo names are case-insensitive for identity purposes. */
 export function findRepoByOwnerRepo(owner: string, repo: string): RepoRecord | undefined {
-  return listRepos().find((r) => r.owner === owner && r.repo === repo);
+  const ownerLower = owner.toLowerCase();
+  const repoLower = repo.toLowerCase();
+  return listRepos().find((r) => r.owner.toLowerCase() === ownerLower && r.repo.toLowerCase() === repoLower);
 }
 
 export type RepoUpsertInput = Omit<RepoRecord, "id" | "registeredAt">;
@@ -38,18 +41,20 @@ export function removeRepo(id: string): boolean {
 // --- per-session event log (last N events), so a dashboard client that connects after a
 // verification session already started can still catch up via a plain GET. ---
 
+export type SessionEventEntry = TrueForgeApi.TurnStreamingEvent | SessionErrorEvent;
+
 const MAX_EVENTS_PER_SESSION = 500;
-const sessionEvents = new Map<string, TrueForgeApi.TurnStreamingEvent[]>();
-const sessionListeners = new Map<string, Set<(event: TrueForgeApi.TurnStreamingEvent) => void>>();
+const sessionEvents = new Map<string, SessionEventEntry[]>();
+const sessionListeners = new Map<string, Set<(event: SessionEventEntry) => void>>();
 
 /** Stores `event`, merging streaming deltas into their base `model.message` so the catch-up
  *  buffer stays compact — but always notifies live listeners with the raw event so an open
  *  SSE connection still sees smooth incremental deltas. */
-export function appendSessionEvent(sessionId: string, event: TrueForgeApi.TurnStreamingEvent): void {
+export function appendSessionEvent(sessionId: string, event: SessionEventEntry): void {
   const events = sessionEvents.get(sessionId) ?? [];
 
   if (isEventDelta(event)) {
-    const base = events.find((e) => e.id === event.id);
+    const base = events.find((e): e is TrueForgeApi.TurnStreamingEvent => e.type !== "session.error" && e.id === event.id);
     if (base) {
       mergeEventDelta(base, event);
     } else {
@@ -70,14 +75,14 @@ export function appendSessionEvent(sessionId: string, event: TrueForgeApi.TurnSt
   }
 }
 
-export function getSessionEvents(sessionId: string): TrueForgeApi.TurnStreamingEvent[] {
+export function getSessionEvents(sessionId: string): SessionEventEntry[] {
   return sessionEvents.get(sessionId) ?? [];
 }
 
 /** Returns an unsubscribe function. */
 export function subscribeToSession(
   sessionId: string,
-  listener: (event: TrueForgeApi.TurnStreamingEvent) => void,
+  listener: (event: SessionEventEntry) => void,
 ): () => void {
   const listeners = sessionListeners.get(sessionId) ?? new Set();
   listeners.add(listener);

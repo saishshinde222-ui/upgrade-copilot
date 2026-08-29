@@ -1,11 +1,22 @@
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import "dotenv/config";
 import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
+import semver from "semver";
 import { TrueForgeApi } from "@truefoundry/trueforge-sdk";
 import { buildGraph, impactOf } from "./graph.js";
 import { createGitHubClient, fetchPackageJson, parseRepoUrl } from "./github.js";
-import { appendSessionEvent, getRepo, getSessionEvents, listRepos, removeRepo, subscribeToSession, upsertRepo } from "./store.js";
+import {
+  appendSessionEvent,
+  getRepo,
+  getSessionEvents,
+  listRepos,
+  removeRepo,
+  subscribeToSession,
+  upsertRepo,
+  type SessionEventEntry,
+} from "./store.js";
 import { ensureAgent, startVerificationSession, respondToApproval } from "./trueforgeAgent.js";
 import type { RepoRecord } from "./types.js";
 
@@ -28,6 +39,38 @@ function asyncRoute(handler: (req: Request, res: Response) => Promise<void>) {
   };
 }
 
+app.get("/health", (_req, res) => {
+  res.json({ status: "ok" });
+});
+
+/** Constant-time string compare so key-guessing can't be timed. */
+function secretsMatch(provided: string, expected: string): boolean {
+  const providedBuf = Buffer.from(provided);
+  const expectedBuf = Buffer.from(expected);
+  if (providedBuf.length !== expectedBuf.length) return false;
+  return timingSafeEqual(providedBuf, expectedBuf);
+}
+
+/** Every route below this line requires a caller-supplied API key. EventSource can't set
+ *  request headers, so the SSE stream route also accepts it as a query param. Fails closed:
+ *  startServer() refuses to run without API_KEY set, so reaching the "missing" branch below
+ *  means misconfiguration, not an intentionally-open server. */
+function requireApiKey(req: Request, res: Response, next: NextFunction): void {
+  const expected = process.env.API_KEY;
+  if (!expected) {
+    res.status(500).json({ error: "Server is missing API_KEY configuration" });
+    return;
+  }
+  const provided = req.header("x-api-key") ?? (typeof req.query.apiKey === "string" ? req.query.apiKey : undefined);
+  if (!provided || !secretsMatch(provided, expected)) {
+    res.status(401).json({ error: "Missing or invalid API key" });
+    return;
+  }
+  next();
+}
+
+app.use(requireApiKey);
+
 function repoSummary(repo: RepoRecord) {
   return {
     id: repo.id,
@@ -49,21 +92,24 @@ async function registerRepoByUrl(url: string): Promise<RepoRecord> {
     throw new HttpError(400, err instanceof Error ? err.message : `Invalid repository URL: "${url}"`);
   }
   const client = createGitHubClient();
-  const pkg = await fetchPackageJson(client, ref);
+  let pkg;
+  try {
+    pkg = await fetchPackageJson(client, ref);
+  } catch (err) {
+    throw new HttpError(422, err instanceof Error ? err.message : `Failed to read package.json for "${url}"`);
+  }
   return upsertRepo({
     url,
-    owner: ref.owner,
-    repo: ref.repo,
+    // Use GitHub's canonical casing, not whatever casing the caller happened to type — two
+    // URLs differing only in case must resolve to the same registered repo.
+    owner: pkg.owner,
+    repo: pkg.repo,
     defaultBranch: pkg.defaultBranch,
     dependencies: pkg.dependencies,
     devDependencies: pkg.devDependencies,
     lastFetchedAt: new Date().toISOString(),
   });
 }
-
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok" });
-});
 
 app.get(
   "/repos",
@@ -84,6 +130,24 @@ app.post(
   }),
 );
 
+const MAX_BULK_REPOS = 25;
+const BULK_CONCURRENCY = 5;
+
+/** Runs `fn` over `items` with at most `limit` in flight at once. */
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const current = nextIndex++;
+      if (current >= items.length) return;
+      results[current] = await fn(items[current]!);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
 app.post(
   "/repos/bulk",
   asyncRoute(async (req, res) => {
@@ -91,21 +155,22 @@ app.post(
     if (!Array.isArray(urls) || urls.length === 0) {
       throw new HttpError(400, "Request body must include a non-empty array field \"urls\"");
     }
+    if (urls.length > MAX_BULK_REPOS) {
+      throw new HttpError(400, `"urls" must contain at most ${MAX_BULK_REPOS} entries (got ${urls.length})`);
+    }
     if (!urls.every((u) => typeof u === "string")) {
       throw new HttpError(400, "Every entry in \"urls\" must be a string");
     }
 
-    const results = await Promise.all(
-      (urls as string[]).map(async (url) => {
-        try {
-          const repo = await registerRepoByUrl(url);
-          return { url, success: true as const, data: repoSummary(repo) };
-        } catch (err) {
-          const message = err instanceof HttpError || err instanceof Error ? err.message : "Unknown error";
-          return { url, success: false as const, error: message };
-        }
-      }),
-    );
+    const results = await mapWithConcurrency(urls as string[], BULK_CONCURRENCY, async (url) => {
+      try {
+        const repo = await registerRepoByUrl(url);
+        return { url, success: true as const, data: repoSummary(repo) };
+      } catch (err) {
+        const message = err instanceof HttpError || err instanceof Error ? err.message : "Unknown error";
+        return { url, success: false as const, error: message };
+      }
+    });
 
     res.status(207).json({ data: results });
   }),
@@ -151,14 +216,34 @@ app.get(
   }),
 );
 
+// Deliberately conservative: only accepts the npm package name grammar (with scoped-package
+// support), so a value that could redirect the agent's prompt (newlines, quotes, instructions)
+// is rejected outright rather than reaching src/trueforgeAgent.ts's prompt string.
+const NPM_PACKAGE_NAME = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
+
+function assertValidDependencyName(name: string): void {
+  if (!NPM_PACKAGE_NAME.test(name)) {
+    throw new HttpError(400, `"${name}" is not a valid npm package name`);
+  }
+}
+
+function assertValidTargetVersion(version: string): void {
+  if (!semver.validRange(version)) {
+    throw new HttpError(400, `"${version}" is not a valid semver range`);
+  }
+}
+
 app.post(
   "/impact/:dependency/verify",
   asyncRoute(async (req, res) => {
     const dependencyName = req.params.dependency!;
+    assertValidDependencyName(dependencyName);
+
     const { targetVersion } = req.body as { targetVersion?: unknown };
     if (typeof targetVersion !== "string" || targetVersion.trim().length === 0) {
       throw new HttpError(400, "Request body must include a non-empty string field \"targetVersion\"");
     }
+    assertValidTargetVersion(targetVersion);
 
     const impact = impactOf(listRepos(), dependencyName);
     if (!impact) {
@@ -196,6 +281,18 @@ app.get("/sessions/:sessionId/stream", (req, res) => {
   });
 });
 
+/** A pending approval must correspond to a `tool.approval_required` event we actually saw for
+ *  this session — otherwise any caller who can guess or reuse a threadId/toolCallId could
+ *  submit an approval decision for a call that was never actually paused there. */
+function findPendingApproval(sessionId: string, threadId: string, toolCallId: string): boolean {
+  return getSessionEvents(sessionId).some(
+    (event) =>
+      event.type === "tool.approval_required" &&
+      event.threadId === threadId &&
+      event.toolCalls.some((tc) => tc.id === toolCallId),
+  );
+}
+
 app.post(
   "/sessions/:sessionId/approval",
   asyncRoute(async (req, res) => {
@@ -211,6 +308,9 @@ app.post(
     if (approval?.status !== "allow" && approval?.status !== "deny") {
       throw new HttpError(400, "Request body field \"approval.status\" must be \"allow\" or \"deny\"");
     }
+    if (!findPendingApproval(sessionId, threadId, toolCallId)) {
+      throw new HttpError(404, "No pending approval matches this session, threadId, and toolCallId");
+    }
     const decision: TrueForgeApi.ApprovalDecision =
       approval.status === "allow"
         ? { status: "allow" }
@@ -224,11 +324,10 @@ app.post(
 
 /** Consumes `stream` in the background, appending every event to the session's event log,
  *  and resolves with the turn id as soon as `turn.created` is observed (without waiting for
- *  the whole turn — verification can run for minutes across sandboxed subagents). */
-function relayStream(
-  sessionId: string,
-  stream: AsyncIterable<TrueForgeApi.TurnStreamingEvent>,
-): Promise<string | undefined> {
+ *  the whole turn — verification can run for minutes across sandboxed subagents). If the
+ *  stream itself breaks after that point, appends a synthetic `session.error` event so SSE
+ *  clients see a terminal state instead of waiting forever. */
+function relayStream(sessionId: string, stream: AsyncIterable<TrueForgeApi.TurnStreamingEvent>): Promise<string | undefined> {
   const iterator = stream[Symbol.asyncIterator]();
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -245,11 +344,20 @@ function relayStream(
         }
         if (!settled) resolve(undefined);
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
         if (!settled) {
           settled = true;
-          reject(err instanceof Error ? err : new Error(String(err)));
+          reject(err instanceof Error ? err : new Error(message));
         } else {
           console.error(`Session ${sessionId} stream error after turn started:`, err);
+          const errorEvent: SessionEventEntry = {
+            type: "session.error",
+            id: randomUUID(),
+            threadId: null,
+            createdAt: new Date().toISOString(),
+            message,
+          };
+          appendSessionEvent(sessionId, errorEvent);
         }
       }
     })();
@@ -273,6 +381,11 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 const PORT = Number(process.env.PORT ?? 4000);
 
 export async function startServer(): Promise<void> {
+  if (!process.env.API_KEY) {
+    throw new Error(
+      "API_KEY environment variable is not set. Generate one (e.g. `openssl rand -hex 32`) and set it before starting the server — every route except /health requires it.",
+    );
+  }
   await ensureAgent();
   app.listen(PORT, () => {
     console.log(`Upgrade Copilot API listening on http://localhost:${PORT}`);

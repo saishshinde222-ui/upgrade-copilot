@@ -47,3 +47,14 @@ export interface DependencyGraph {
   dependencyNodes: GraphDependencyNode[];
   edges: GraphEdge[];
 }
+
+/** Synthetic terminal event we inject into a session's event log when the background
+ *  relay of a TrueForge turn stream fails after the turn already started — the SDK's own
+ *  event union has no "this stream broke" event, so SSE clients would otherwise wait forever. */
+export interface SessionErrorEvent {
+  type: "session.error";
+  id: string;
+  threadId: null;
+  createdAt: string;
+  message: string;
+}

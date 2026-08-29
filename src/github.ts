@@ -34,8 +34,8 @@ export function parseRepoUrl(input: string): RepoRef {
       throw new Error(`Only github.com repositories are supported, got host "${url.hostname}"`);
     }
     const parts = url.pathname.split("/").filter(Boolean);
-    if (parts.length < 2) {
-      throw new Error(`URL is missing an owner/repo path: "${input}"`);
+    if (parts.length !== 2) {
+      throw new Error(`Expected a repository root URL (owner/repo), got "${input}"`);
     }
     const owner = parts[0]!;
     const repo = parts[1]!.replace(/\.git$/, "");
@@ -68,33 +68,64 @@ export function createGitHubClient(): Octokit {
 }
 
 export interface PackageJsonResult {
+  /** Canonical casing from GitHub, which may differ from the casing the caller supplied. */
+  owner: string;
+  repo: string;
   defaultBranch: string;
   dependencies: DependencyMap;
   devDependencies: DependencyMap;
 }
 
+/** Throws unless `value` is absent or a plain object mapping string keys to string values. */
+function assertDependencyMap(value: unknown, fieldName: string, ownerRepo: string): DependencyMap {
+  if (value === undefined) return {};
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${ownerRepo}: package.json "${fieldName}" must be an object`);
+  }
+  for (const [name, spec] of Object.entries(value)) {
+    if (typeof spec !== "string") {
+      throw new Error(`${ownerRepo}: package.json "${fieldName}.${name}" must be a string, got ${typeof spec}`);
+    }
+  }
+  return value as DependencyMap;
+}
+
 export async function fetchPackageJson(client: Octokit, ref: RepoRef): Promise<PackageJsonResult> {
   const { data: repoData } = await client.rest.repos.get({ owner: ref.owner, repo: ref.repo });
+  const owner = repoData.owner.login;
+  const repo = repoData.name;
   const defaultBranch = repoData.default_branch;
+  const ownerRepo = `${owner}/${repo}`;
 
   const { data: fileData } = await client.rest.repos.getContent({
-    owner: ref.owner,
-    repo: ref.repo,
+    owner,
+    repo,
     path: "package.json",
     ref: defaultBranch,
   });
 
   if (Array.isArray(fileData) || fileData.type !== "file" || !fileData.content) {
-    throw new Error(`package.json not found at the root of ${ref.owner}/${ref.repo}`);
+    throw new Error(`package.json not found at the root of ${ownerRepo}`);
   }
 
   const raw = Buffer.from(fileData.content, "base64").toString("utf-8");
-  const parsed = JSON.parse(raw) as { dependencies?: DependencyMap; devDependencies?: DependencyMap };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`${ownerRepo}: package.json is not valid JSON`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${ownerRepo}: package.json must be a JSON object`);
+  }
+  const record = parsed as Record<string, unknown>;
 
   return {
+    owner,
+    repo,
     defaultBranch,
-    dependencies: parsed.dependencies ?? {},
-    devDependencies: parsed.devDependencies ?? {},
+    dependencies: assertDependencyMap(record.dependencies, "dependencies", ownerRepo),
+    devDependencies: assertDependencyMap(record.devDependencies, "devDependencies", ownerRepo),
   };
 }
 
@@ -140,41 +171,56 @@ export async function openPullRequest(
     sha: baseRef.object.sha,
   });
 
-  for (const file of input.files) {
-    let sha: string | undefined;
-    try {
-      const { data: existing } = await client.rest.repos.getContent({
+  try {
+    for (const file of input.files) {
+      let sha: string | undefined;
+      try {
+        const { data: existing } = await client.rest.repos.getContent({
+          owner: input.ref.owner,
+          repo: input.ref.repo,
+          path: file.path,
+          ref: input.branchName,
+        });
+        if (!Array.isArray(existing) && existing.type === "file") {
+          sha = existing.sha;
+        }
+      } catch (err) {
+        if (!isNotFoundError(err)) throw err;
+      }
+
+      await client.rest.repos.createOrUpdateFileContents({
         owner: input.ref.owner,
         repo: input.ref.repo,
         path: file.path,
-        ref: input.branchName,
+        message: file.message ?? `Update ${file.path}`,
+        content: Buffer.from(file.content, "utf-8").toString("base64"),
+        branch: input.branchName,
+        sha,
       });
-      if (!Array.isArray(existing) && existing.type === "file") {
-        sha = existing.sha;
-      }
-    } catch (err) {
-      if (!isNotFoundError(err)) throw err;
     }
 
-    await client.rest.repos.createOrUpdateFileContents({
+    const { data: pr } = await client.rest.pulls.create({
       owner: input.ref.owner,
       repo: input.ref.repo,
-      path: file.path,
-      message: file.message ?? `Update ${file.path}`,
-      content: Buffer.from(file.content, "utf-8").toString("base64"),
-      branch: input.branchName,
-      sha,
+      title: input.title,
+      body: input.body,
+      head: input.branchName,
+      base: input.baseBranch,
     });
+
+    return { url: pr.html_url, number: pr.number };
+  } catch (err) {
+    // Best-effort cleanup: an orphaned branch with no PR would otherwise block every retry
+    // (createRef fails if the branch already exists).
+    try {
+      await client.rest.git.deleteRef({
+        owner: input.ref.owner,
+        repo: input.ref.repo,
+        ref: `heads/${input.branchName}`,
+      });
+    } catch (cleanupErr) {
+      console.error(`Failed to clean up orphaned branch "${input.branchName}" after a failed PR:`, cleanupErr);
+    }
+    throw err;
   }
-
-  const { data: pr } = await client.rest.pulls.create({
-    owner: input.ref.owner,
-    repo: input.ref.repo,
-    title: input.title,
-    body: input.body,
-    head: input.branchName,
-    base: input.baseBranch,
-  });
-
-  return { url: pr.html_url, number: pr.number };
 }
