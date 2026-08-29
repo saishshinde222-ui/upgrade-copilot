@@ -1,11 +1,16 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
 const API_KEY_STORAGE_KEY = "upgrade-copilot.apiKey";
 
-/** The backend API key, entered once by the operator and kept only in this browser's
- *  localStorage — never baked into the build (a VITE_* env var ships in the JS bundle,
- *  which would defeat the point of a secret). Falls back to "" when storage is unavailable
- *  (private browsing, blocked site data), same as any other empty-key request. */
+// In-memory fallback so a key entered via setApiKey() still works for the rest of this page
+// session even when localStorage throws (private browsing, blocked site data) — without this,
+// "Save" would silently fail to authenticate anything, not just fail to persist across reloads.
+let apiKeyMemory: string | null = null;
+
+/** The backend API key, entered once by the operator via the header input and kept only in
+ *  this browser's localStorage — never baked into the build (a VITE_* env var ships in the JS
+ *  bundle, which would defeat the point of a secret). */
 export function getApiKey(): string {
+  if (apiKeyMemory !== null) return apiKeyMemory;
   try {
     return localStorage.getItem(API_KEY_STORAGE_KEY) ?? "";
   } catch {
@@ -14,10 +19,12 @@ export function getApiKey(): string {
 }
 
 export function setApiKey(key: string): void {
+  apiKeyMemory = key;
   try {
     localStorage.setItem(API_KEY_STORAGE_KEY, key);
   } catch {
-    // best-effort; the key just won't persist across reloads in this environment
+    // best-effort; the key still works for this page session via the in-memory fallback
+    // above, it just won't persist across reloads in this environment
   }
 }
 
@@ -135,10 +142,45 @@ export function respondApproval(
   }).then((r) => r.data);
 }
 
-export function streamSessionUrl(sessionId: string): string {
-  // EventSource can't set request headers, so the stream route also accepts the key as a
-  // query param.
-  return `${API_BASE}/sessions/${sessionId}/stream?apiKey=${encodeURIComponent(getApiKey())}`;
+/**
+ * Opens the session's SSE stream and invokes `onEvent` with each frame's raw `data:` payload,
+ * until `signal` aborts or the connection ends. Uses a hand-rolled fetch + ReadableStream
+ * reader instead of the native EventSource specifically so it can send the X-API-Key header —
+ * EventSource can't set request headers, and putting the key in the URL instead would leak it
+ * into browser history, proxy logs, and any request-logging middleware.
+ */
+export async function subscribeToSessionStream(
+  sessionId: string,
+  onEvent: (rawData: string) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/sessions/${sessionId}/stream`, {
+    headers: { "X-API-Key": getApiKey() },
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    throw new Error(`Failed to open session stream (status ${res.status})`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return;
+    buffer += decoder.decode(value, { stream: true });
+
+    let separatorIndex: number;
+    while ((separatorIndex = buffer.indexOf("\n\n")) !== -1) {
+      const frame = buffer.slice(0, separatorIndex);
+      buffer = buffer.slice(separatorIndex + 2);
+      for (const line of frame.split("\n")) {
+        if (line.startsWith("data: ")) {
+          onEvent(line.slice("data: ".length));
+        }
+      }
+    }
+  }
 }
 
 export function fetchSessionEvents(sessionId: string) {

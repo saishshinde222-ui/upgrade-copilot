@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchSessionEvents, streamSessionUrl } from "../api";
+import { fetchSessionEvents, subscribeToSessionStream } from "../api";
 import {
   messageText,
   type ModelMessageEvent,
@@ -54,19 +54,26 @@ export function SessionView({ sessionId }: Props) {
         // stream below will still populate the view
       });
 
-    const source = new EventSource(streamSessionUrl(sessionId));
-    source.onmessage = (msg) => {
-      try {
-        append(JSON.parse(msg.data) as SessionEvent);
-      } catch {
-        // ignore malformed frames
-      }
-    };
+    const controller = new AbortController();
+    subscribeToSessionStream(
+      sessionId,
+      (raw) => {
+        try {
+          append(JSON.parse(raw) as SessionEvent);
+        } catch {
+          // ignore malformed frames
+        }
+      },
+      controller.signal,
+    ).catch((err) => {
+      if (!cancelled) console.error(`Session ${sessionId} stream error:`, err);
+    });
+
     return () => {
       // Guards the fetchSessionEvents().then() above: without this, a response that resolves
       // after sessionId changes could append stale events into the new session's state.
       cancelled = true;
-      source.close();
+      controller.abort();
     };
   }, [sessionId]);
 
