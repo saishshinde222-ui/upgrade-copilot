@@ -1,0 +1,28 @@
+[pr_reviewer]
+num_max_findings = 8
+extra_instructions = """
+Pay special attention to these project-specific rules for Upgrade Copilot:
+
+1. Every call into the @truefoundry/trueforge-sdk client (TrueForge class instance) that can throw
+   must catch it specifically — check `instanceof TrueForgeApi.ConflictError` or the base
+   `TrueForgeError` from the SDK — rather than a bare `catch (err)` / `catch {}` that swallows or
+   generically re-throws without distinguishing SDK errors from programmer errors.
+2. No hardcoded API keys, tokens, or secrets anywhere in source (github.ts, trueforgeAgent.ts,
+   server.ts, or elsewhere). All credentials must be read from process.env at call time (e.g.
+   process.env.GITHUB_TOKEN). Flag any literal string that looks like a token/key, and flag any
+   .env file that is staged for commit (it must stay gitignored).
+"""
+
+[best_practices]
+content = """
+# Upgrade Copilot custom review rules
+
+- Rule 1 — TrueForgeError handling: any call into the TrueForge SDK client that can reject must
+  handle it by checking against the SDK's own error types (TrueForgeError / TrueForgeApi.ConflictError
+  etc.), not a bare/generic catch. A generic catch that just logs and rethrows, or swallows the error,
+  does not satisfy this rule.
+- Rule 2 — No hardcoded secrets: API keys, tokens, and other credentials must never appear as string
+  literals in source. They must be read from process.env (or, for the dashboard, from a non-secret
+  build-time env var like VITE_API_BASE_URL — never a secret in frontend code, since it ships to the
+  browser). A committed .env file (as opposed to .env.example) is also a violation of this rule.
+"""

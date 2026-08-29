@@ -1,0 +1,40 @@
+name: Qodo custom rules check
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+jobs:
+  custom-rules-check:
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      # pull_request_target grants secrets and a write-capable GITHUB_TOKEN even for fork
+      # PRs. Checking out the default ref (no `ref:` override) — never the PR head —
+      # means a PR can't rewrite this workflow or the agent's own instructions and have
+      # that modified version run against our secrets. That does NOT fully neutralize
+      # the PR: its diff text is still untrusted input the agent reads (via `gh pr
+      # diff`/`gh pr view`, never checked out as code), so the agent's own instructions
+      # are written to treat that text strictly as data, never as commands to follow.
+      # This is the standard, unavoidable residual risk of any LLM-based PR reviewer.
+      - name: Checkout base branch (never the PR head — this job holds secrets)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Upgrade Copilot custom rules check
+        uses: qodo-ai/command@v1
+        env:
+          QODO_API_KEY: ${{ secrets.QODO_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          prompt: pr-custom-rules-check
+          agent-file: .github/qodo/agents/pr-custom-rules-check/agent.toml
+          key-value-pairs: |
+            pr_number=${{ github.event.pull_request.number }}
+            repo_owner=${{ github.repository_owner }}
+            repo_name=${{ github.event.repository.name }}
