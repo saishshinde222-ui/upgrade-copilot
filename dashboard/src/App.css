@@ -9,8 +9,22 @@
 }
 
 .app-header p {
-  margin: 0 0 24px;
+  margin: 0 0 16px;
   color: var(--muted);
+}
+
+.api-key-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 24px;
+  max-width: 420px;
+}
+
+.api-key-row label {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .app-body {
@@ -234,6 +248,11 @@
 
 .event-info {
   color: var(--muted);
+}
+
+.event-error {
+  color: var(--danger);
+  font-weight: 600;
 }
 
 .approval-overlay {

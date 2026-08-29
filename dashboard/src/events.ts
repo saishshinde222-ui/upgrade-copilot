@@ -69,6 +69,16 @@ export interface ThreadDoneEvent {
   createdAt: string;
 }
 
+/** Synthetic terminal event the backend injects when a turn stream breaks after it started —
+ *  the SDK's own event union has nothing for "this stream broke". */
+export interface SessionErrorEvent {
+  type: "session.error";
+  id: string;
+  threadId: null;
+  createdAt: string;
+  message: string;
+}
+
 export interface GenericSessionEvent {
   type: string;
   id?: string;
@@ -85,6 +95,7 @@ export type SessionEvent =
   | SandboxCreatedEvent
   | TurnDoneEvent
   | ThreadDoneEvent
+  | SessionErrorEvent
   | GenericSessionEvent;
 
 export function messageText(content: ModelMessageEvent["content"]): string {

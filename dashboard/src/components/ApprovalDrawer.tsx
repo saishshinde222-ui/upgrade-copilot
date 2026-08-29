@@ -1,25 +1,33 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { respondApproval } from "../api";
 import { findToolCall, type SessionEvent, type ToolApprovalRequiredEvent } from "../events";
 
-export interface PendingApproval {
+interface Props {
   sessionId: string;
   event: ToolApprovalRequiredEvent;
+  /** The session's live event list — read fresh on every render (not a snapshot), so if this
+   *  drawer opens before the tool call's originating model.message has replayed, it still
+   *  picks up the real tool name/arguments once that event arrives. */
   contextEvents: SessionEvent[];
-}
-
-interface Props {
-  pending: PendingApproval;
   onResolved: () => void;
 }
 
-export function ApprovalDrawer({ pending, onResolved }: Props) {
+export function ApprovalDrawer({ sessionId, event, contextEvents, onResolved }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resolution, setResolution] = useState<{ status: "allow" | "deny" } | null>(null);
 
-  const toolCall = pending.event.toolCalls[0];
-  const info = toolCall ? findToolCall(pending.contextEvents, toolCall.id) : undefined;
+  // A parent component gives every pending approval its own component instance (keyed by
+  // event.id), so this timer only ever belongs to the approval it was set for — but it's
+  // still cleared on unmount so a fast-resolving-then-remounting parent can't leak it.
+  useEffect(() => {
+    if (!resolution) return;
+    const timer = setTimeout(onResolved, 1500);
+    return () => clearTimeout(timer);
+  }, [resolution, onResolved]);
+
+  const toolCall = event.toolCalls[0];
+  const info = toolCall ? findToolCall(contextEvents, toolCall.id) : undefined;
   const toolName = info?.function?.name ?? info?.toolInfo?.name ?? "unknown tool";
   let args: unknown = info?.function?.arguments;
   try {
@@ -33,13 +41,12 @@ export function ApprovalDrawer({ pending, onResolved }: Props) {
     setBusy(true);
     setError(null);
     try {
-      await respondApproval(pending.sessionId, {
-        threadId: pending.event.threadId,
+      await respondApproval(sessionId, {
+        threadId: event.threadId,
         toolCallId: toolCall.id,
         approval: status === "allow" ? { status: "allow" } : { status: "deny", reason: "Denied from dashboard" },
       });
       setResolution({ status });
-      setTimeout(onResolved, 1500);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to submit approval");
     } finally {

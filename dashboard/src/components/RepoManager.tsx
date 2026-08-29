@@ -31,8 +31,11 @@ export function RepoManager({ repos, loading, onAdd, onRefresh, onRemove }: Prop
 
   async function handleRefresh(id: string) {
     setBusyId(id);
+    setError(null);
     try {
       await onRefresh(id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to refresh repo");
     } finally {
       setBusyId(null);
     }
@@ -40,8 +43,11 @@ export function RepoManager({ repos, loading, onAdd, onRefresh, onRemove }: Prop
 
   async function handleRemove(id: string) {
     setBusyId(id);
+    setError(null);
     try {
       await onRemove(id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to remove repo");
     } finally {
       setBusyId(null);
     }

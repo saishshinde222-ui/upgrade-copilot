@@ -1,4 +1,25 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
+const API_KEY_STORAGE_KEY = "upgrade-copilot.apiKey";
+
+/** The backend API key, entered once by the operator and kept only in this browser's
+ *  localStorage — never baked into the build (a VITE_* env var ships in the JS bundle,
+ *  which would defeat the point of a secret). Falls back to "" when storage is unavailable
+ *  (private browsing, blocked site data), same as any other empty-key request. */
+export function getApiKey(): string {
+  try {
+    return localStorage.getItem(API_KEY_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function setApiKey(key: string): void {
+  try {
+    localStorage.setItem(API_KEY_STORAGE_KEY, key);
+  } catch {
+    // best-effort; the key just won't persist across reloads in this environment
+  }
+}
 
 export interface RepoSummary {
   id: string;
@@ -50,7 +71,7 @@ export interface BulkRepoResult {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    headers: { "Content-Type": "application/json", "X-API-Key": getApiKey(), ...(init?.headers ?? {}) },
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}) as { error?: string });
@@ -115,7 +136,9 @@ export function respondApproval(
 }
 
 export function streamSessionUrl(sessionId: string): string {
-  return `${API_BASE}/sessions/${sessionId}/stream`;
+  // EventSource can't set request headers, so the stream route also accepts the key as a
+  // query param.
+  return `${API_BASE}/sessions/${sessionId}/stream?apiKey=${encodeURIComponent(getApiKey())}`;
 }
 
 export function fetchSessionEvents(sessionId: string) {

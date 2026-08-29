@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import "./App.css";
 import {
+  getApiKey,
   getGraph,
   listRepos,
   refreshRepo,
   registerReposBulk,
   removeRepo,
+  setApiKey,
   verifyDependency,
   type DependencyGraph as DependencyGraphData,
   type RepoSummary,
@@ -14,8 +16,6 @@ import { RepoManager } from "./components/RepoManager";
 import { DependencyGraph } from "./components/DependencyGraph";
 import { DependencyPanel } from "./components/DependencyPanel";
 import { SessionView } from "./components/SessionView";
-import { ApprovalDrawer, type PendingApproval } from "./components/ApprovalDrawer";
-import type { SessionEvent, ToolApprovalRequiredEvent } from "./events";
 
 function App() {
   const [repos, setRepos] = useState<RepoSummary[]>([]);
@@ -23,7 +23,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [selectedDependency, setSelectedDependency] = useState<string | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
+  const [apiKeyInput, setApiKeyInput] = useState(() => getApiKey());
 
   const refreshAll = useCallback(async () => {
     const [repoList, graphData] = await Promise.all([listRepos(), getGraph()]);
@@ -65,9 +65,9 @@ function App() {
     setSelectedDependency(null);
   }
 
-  function handleApprovalRequired(event: ToolApprovalRequiredEvent, contextEvents: SessionEvent[]) {
-    if (!activeSessionId) return;
-    setPendingApproval({ sessionId: activeSessionId, event, contextEvents });
+  function handleSaveApiKey() {
+    setApiKey(apiKeyInput.trim());
+    refreshAll().catch((err) => console.error("Failed to reload after saving API key", err));
   }
 
   return (
@@ -75,6 +75,17 @@ function App() {
       <header className="app-header">
         <h1>Upgrade Copilot</h1>
         <p>Cross-repo dependency graph + sandboxed upgrade verification, powered by TrueForge.</p>
+        <div className="api-key-row">
+          <label htmlFor="api-key">API key</label>
+          <input
+            id="api-key"
+            type="password"
+            placeholder="Backend API_KEY"
+            value={apiKeyInput}
+            onChange={(e) => setApiKeyInput(e.target.value)}
+          />
+          <button onClick={handleSaveApiKey}>Save</button>
+        </div>
       </header>
 
       <div className="app-body">
@@ -89,12 +100,8 @@ function App() {
             onClose={() => setSelectedDependency(null)}
           />
         )}
-        {activeSessionId && <SessionView sessionId={activeSessionId} onApprovalRequired={handleApprovalRequired} />}
+        {activeSessionId && <SessionView sessionId={activeSessionId} />}
       </div>
-
-      {pendingApproval && (
-        <ApprovalDrawer pending={pendingApproval} onResolved={() => setPendingApproval(null)} />
-      )}
     </div>
   );
 }
