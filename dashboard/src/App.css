@@ -1,0 +1,301 @@
+.app-shell {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.app-header h1 {
+  margin: 0 0 4px;
+}
+
+.app-header p {
+  margin: 0 0 16px;
+  color: var(--muted);
+}
+
+.api-key-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 24px;
+  max-width: 420px;
+}
+
+.api-key-row label {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.app-body {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 20px;
+  position: relative;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.panel h2 {
+  margin-top: 0;
+  font-size: 15px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.repo-manager {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  grid-row: span 2;
+}
+
+.repo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.repo-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.repo-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.repo-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.graph-panel {
+  grid-column: 2;
+}
+
+.graph-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 4px;
+}
+
+.dot-repo {
+  background: #1d4ed8;
+}
+
+.dot-shared {
+  background: #78350f;
+  border: 1px solid #f59e0b;
+}
+
+.dot-mismatch {
+  background: #7f1d1d;
+  border: 2px solid #ef4444;
+}
+
+.dependency-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 380px;
+  border-radius: 0;
+  overflow-y: auto;
+  z-index: 20;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.warning-banner {
+  background: #7f1d1d;
+  border: 1px solid var(--danger);
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.success-text {
+  color: var(--success);
+}
+
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin: 12px 0;
+}
+
+.usage-table th,
+.usage-table td {
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  padding: 6px 4px;
+}
+
+.dev-tag {
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.verify-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.session-view {
+  grid-column: 2;
+}
+
+.pr-links {
+  background: #052e16;
+  border: 1px solid var(--success);
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pr-links a {
+  color: var(--success);
+  font-size: 13px;
+}
+
+.lanes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.lane {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  max-height: 360px;
+  display: flex;
+  flex-direction: column;
+}
+
+.lane-main {
+  border-color: var(--accent);
+}
+
+.lane-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 6px;
+  color: var(--accent);
+}
+
+.lane-body {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.event p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.event-tool-call code,
+.event-tool-response code {
+  color: #93c5fd;
+  word-break: break-word;
+}
+
+.event-approval {
+  color: #fbbf24;
+  font-weight: 600;
+}
+
+.event-info {
+  color: var(--muted);
+}
+
+.event-error {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.approval-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.approval-drawer {
+  background: var(--panel);
+  border: 1px solid #fbbf24;
+  border-radius: 10px;
+  padding: 20px;
+  width: 480px;
+  max-width: 90vw;
+}
+
+.approval-args {
+  background: #0f172a;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 12px;
+  overflow-x: auto;
+  max-height: 240px;
+}
+
+.approval-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.error-text {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.empty {
+  color: var(--muted);
+  font-size: 13px;
+}
